@@ -1,0 +1,26 @@
+Note that xdk-asf-3.40.0 uses floating point arithmetic in the
+i2c_master.c code, which need to be replaced with integer arithmetic
+to make the firmware fit into flash.
+
+--- xdk-asf-3.40.0/sam0/drivers/sercom/i2c/i2c_sam0/i2c_master.c	2018-05-11 02:37:22.000000000 +0200
++++ xdk-asf-3.40.0/sam0/drivers/sercom/i2c/i2c_sam0/i2c_master.c	2018-07-06 01:26:15.066161407 +0200
+@@ -167,13 +167,14 @@
+ 	uint32_t fscl        = 1000 * config->baud_rate;
+ 	uint32_t fscl_hs     = 1000 * config->baud_rate_high_speed;
+ 	uint32_t trise       = config->sda_scl_rise_time_ns;
+-
+-	tmp_baud = (int32_t)(div_ceil(
+-			fgclk - fscl * (10 + (fgclk * 0.000000001)* trise), 2 * fscl));
+-
++
++	tmp_baud = (int32_t)(div_ceil(fgclk, 2 * fscl)
++                             + fgclk / 1000 * trise / 2 / 1000000
++                             - 5);
++
+ 	/* For High speed mode, set the SCL ratio of high:low to 1:2. */
+ 	if (config->transfer_speed == I2C_MASTER_SPEED_HIGH_SPEED) {
+-		tmp_baudlow_hs = (int32_t)((fgclk * 2.0) / (3.0 * fscl_hs) - 1);
++		tmp_baudlow_hs = (int32_t)(fgclk * 2 / 3 / fscl_hs - 1);
+ 		if (tmp_baudlow_hs) {
+ 			tmp_baud_hs = (int32_t)(fgclk / fscl_hs) - 2 - tmp_baudlow_hs;
+ 		} else {

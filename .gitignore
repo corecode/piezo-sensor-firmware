@@ -1,0 +1,11 @@
+common
+sam0
+*.bin
+*.elf
+*.hex
+*.lss
+*.map
+*.sym
+xdk-asf-*
+*.o
+*.d
