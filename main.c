@@ -15,6 +15,9 @@
 #include <udd.h>
 
 
+#define USE_ACCEL 0
+
+
 enum {
         PIN_POWER_LED = PIN_PA07,
         PIN_ACCEL_LED = PIN_PA10,
@@ -34,12 +37,12 @@ enum {
 };
 
 enum {
-        LATCH_TIME_MS = 500,
+        LATCH_TIME_MS = 50,
 };
 
 enum {
         VDD_MV = 3300,
-        PIEZO_THRESHOLD_MV = 50,
+        PIEZO_THRESHOLD_MV = 400,
 };
 
 enum {
@@ -47,7 +50,7 @@ enum {
 };
 
 enum {
-        ACCEL_THRESHOLD = 0x4400,
+        ACCEL_THRESHOLD = 8500,
 };
 
 void system_board_init(void);
@@ -57,6 +60,7 @@ void system_board_init(void);
 static struct ac_module ac;
 static struct usart_module usart;
 static struct i2c_master_module i2c;
+static struct adc_module adc;
 
 static int cdc_enabled, cdc_ready;
 static volatile uint32_t time_ms;
@@ -180,7 +184,7 @@ configure_ac(void)
         config_chan.output_mode = AC_CHAN_OUTPUT_SYNCHRONOUS;
 
         config_chan.vcc_scale_factor = (VDD_MV/2 + PIEZO_THRESHOLD_MV + VDD_MV / 64 - 1) * 64 / VDD_MV;
-        config_chan.interrupt_selection = AC_CHAN_INTERRUPT_SELECTION_TOGGLE;
+        config_chan.interrupt_selection = AC_CHAN_INTERRUPT_SELECTION_RISING;
         ac_chan_set_config(&ac, AC_PIEZO, &config_chan);
         ac_chan_enable(&ac, AC_PIEZO);
 
@@ -246,6 +250,23 @@ configure_i2c(void)
 }
 
 static void
+configure_adc(void)
+{
+        struct adc_config config_adc;
+        adc_get_config_defaults(&config_adc);
+        config_adc.clock_prescaler = ADC_CLOCK_PRESCALER_DIV512;
+        config_adc.freerunning = true;
+        config_adc.positive_input = ADC_PIEZO;
+        config_adc.gain_factor = ADC_GAIN_FACTOR_DIV2;
+        config_adc.reference = ADC_REFERENCE_INTVCC1;
+        config_adc.resolution = ADC_RESOLUTION_CUSTOM;
+        config_adc.divide_result = ADC_DIVIDE_RESULT_2;
+        config_adc.accumulate_samples = ADC_ACCUMULATE_SAMPLES_2;
+        adc_init(&adc, ADC, &config_adc);
+        adc_enable(&adc);
+}
+
+static void
 configure_systick(void)
 {
         SysTick_Config(system_gclk_chan_get_hz(0) / SYSTICK_FREQ);
@@ -259,7 +280,7 @@ configure_accel(void)
         accel_read(0x0f, &whoami, 1);
         delay_us(20);           /* weird race bug prevents NAK */
 
-        uint8_t ctrl[] = {0x20, 0b01101100, 0, 1};
+        uint8_t ctrl[] = {0x20, 0b01101100, 0, 1, 0b00110100};
         accel_write(&ctrl, sizeof(ctrl));
 }
 
@@ -273,11 +294,45 @@ system_board_init(void)
 	port_pin_set_config(PIN_POWER_LED, &pin);
 	port_pin_set_config(PIN_ACCEL_LED, &pin);
 	port_pin_set_config(PIN_PIEZO_LED, &pin);
+	port_pin_set_config(PIN_SIGNAL, &pin);
         port_pin_set_output_level(PIN_POWER_LED, 1);
         port_pin_set_output_level(PIN_ACCEL_LED, 0);
         port_pin_set_output_level(PIN_PIEZO_LED, 0);
+        port_pin_set_output_level(PIN_PIEZO_LED, 0);
         pin.direction = PORT_PIN_DIR_INPUT;
 	port_pin_set_config(PIN_ACCEL_INT, &pin);
+}
+
+static void
+print_number(int prefix, int16_t num)
+{
+        if (!cdc_ready || !cdc_enabled)
+                return;
+
+        char out[10];
+        char *const end = out + sizeof(out);
+        char *pos = end;
+
+        *--pos = '\n';
+
+        for (int16_t val = abs(num); val != 0; val /= 10)
+                *--pos = '0' + val % 10;
+        if (num == 0)
+                *--pos = '0';
+        if (num < 0)
+                *--pos = '-';
+        *--pos = ' ';
+        *--pos = prefix;
+
+        size_t len = end - pos;
+        if (udi_cdc_get_free_tx_buffer() >= len)
+                udi_cdc_write_buf(pos, len);
+}
+
+static void
+signal_output(int triggered)
+{
+        port_pin_set_output_level(PIN_SIGNAL, triggered);
 }
 
 int
@@ -287,10 +342,12 @@ main(void)
         configure_systick();
         configure_uart();
         configure_ac();
+        configure_adc();
         configure_i2c();
         configure_accel();
 
         udc_start();
+        adc_start_conversion(&adc);
 
         for(;;) {
                 if (piezo_time != 0) {
@@ -301,11 +358,22 @@ main(void)
                                 piezo_time = 0;
                         }
                 }
+#if USE_ACCEL
                 if (port_pin_get_input_level(PIN_ACCEL_INT)) {
-                        uint16_t zaccel;
+                        int16_t zaccel;
                         accel_read(0x2c, &zaccel, 2);
                         if (zaccel > ACCEL_THRESHOLD && accel_time == 0)
                                 accel_time = time_ms;
+                        print_number(accel_time ? 'A' : 'a', zaccel);
+                }
+#endif
+                uint16_t piezo;
+                enum status_code status;
+                while ((status = adc_read(&adc, &piezo)) != STATUS_BUSY) {
+                        if (status == STATUS_OK) {
+                                int16_t piezo_rel = piezo - 0x800;
+                                print_number(piezo_time ? 'P' : 'p', piezo_rel);
+                        }
                 }
                 if (piezo_time != 0) {
                         if (time_ms - piezo_time < LATCH_TIME_MS) {
@@ -315,6 +383,8 @@ main(void)
                                 piezo_time = 0;
                         }
                 }
+                signal_output(piezo_time != 0 || accel_time != 0);
+#if USE_ACCEL
                 if (accel_time != 0) {
                         if (time_ms - accel_time < LATCH_TIME_MS) {
                                 port_pin_set_output_level(PIN_ACCEL_LED, 1);
@@ -323,6 +393,7 @@ main(void)
                                 accel_time = 0;
                         }
                 }
-                __WFI();
+#endif
+                //__WFI();
         }
 }

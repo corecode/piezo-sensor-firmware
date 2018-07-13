@@ -10,6 +10,7 @@ CSRCS= \
        common/services/usb/udc/udc.c                      \
        common/utils/interrupt/interrupt_sam_nvic.c        \
        sam0/drivers/ac/ac_sam_d_r_h/ac.c                  \
+       sam0/drivers/adc/adc_sam_d_r_h/adc.c               \
        sam0/drivers/tc/tc_sam_d_r_h/tc.c                  \
        sam0/drivers/sercom/sercom.c                       \
        sam0/drivers/sercom/usart/usart.c                  \
@@ -71,7 +72,7 @@ INC_PATH = \
 LINKER_SCRIPT_FLASH = sam0/utils/linker_scripts/samd11/gcc/samd11d14am_flash.ld
 DEBUG_SCRIPT_FLASH = ../flash.gdb
 
-OPTIMIZATION = -Og
+OPTIMIZATION = -Os
 
 CPPFLAGS = \
        -D ARM_MATH_CM0PLUS=true                           \
